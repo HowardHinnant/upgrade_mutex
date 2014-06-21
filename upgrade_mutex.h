@@ -110,6 +110,71 @@ public:
                       const std::chrono::time_point<Clock, Duration>& abs_time);
 };
 
+template <class Mutex>
+class upgrade_lock
+{
+public:
+    typedef Mutex mutex_type;
+
+    ~upgrade_lock();
+    upgrade_lock() noexcept;
+    upgrade_lock(upgrade_lock const&) = delete;
+    upgrade_lock& operator=(upgrade_lock const&) = delete;
+    upgrade_lock(upgrade_lock&& ul) noexcept;
+    upgrade_lock& operator=(upgrade_lock&& ul);
+
+    explicit upgrade_lock(mutex_type& m);
+    upgrade_lock(mutex_type& m, std::defer_lock_t) noexcept;
+    upgrade_lock(mutex_type& m, std::try_to_lock_t);
+    upgrade_lock(mutex_type& m, std::adopt_lock_t) noexcept;
+    template <class Clock, class Duration>
+        upgrade_lock(mutex_type& m,
+                    const std::chrono::time_point<Clock, Duration>& abs_time);
+    template <class Rep, class Period>
+        upgrade_lock(mutex_type& m,
+                    const std::chrono::duration<Rep, Period>& rel_time);
+
+    // Shared <-> Upgrade
+
+    upgrade_lock(std::shared_lock<mutex_type>&& sl, std::try_to_lock_t);
+
+    template <class Clock, class Duration>
+        upgrade_lock(std::shared_lock<mutex_type>&& sl,
+                     const std::chrono::time_point<Clock, Duration>& abs_time);
+    template <class Rep, class Period>
+        upgrade_lock(std::shared_lock<mutex_type>&& sl,
+                     const std::chrono::duration<Rep, Period>& rel_time);
+    explicit operator std::shared_lock<mutex_type> () &&;
+
+    // Exclusive <-> Upgrade
+
+    explicit upgrade_lock(std::unique_lock<mutex_type>&& ul);
+    explicit operator std::unique_lock<mutex_type> () &&;
+
+    // Upgrade
+
+    void lock();
+    bool try_lock();
+    template <class Rep, class Period>
+        bool try_lock_for(const std::chrono::duration<Rep, Period>& rel_time);
+    template <class Clock, class Duration>
+        bool
+        try_lock_until(
+                      const std::chrono::time_point<Clock, Duration>& abs_time);
+    void unlock();
+
+    void swap(upgrade_lock&& u);
+    mutex_type* release();
+
+    bool owns_lock() const;
+    explicit operator bool () const;
+    mutex_type* mutex() const;
+};
+
+template <class Mutex>
+void
+swap(upgrade_lock<Mutex>&  x, upgrade_lock<Mutex>&  y);
+
 }  // acme
 */
 
