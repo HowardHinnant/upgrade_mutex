@@ -1,12 +1,12 @@
 //---------------------------- upgrade_mutex.h ---------------------------------
-// 
+//
 // This software is in the public domain.  The only restriction on its use is
 // that no one can remove it from the public domain by claiming ownership of it,
 // including the original authors.
-// 
+//
 // There is no warranty of correctness on the software contained herein.  Use
 // at your own risk.
-// 
+//
 //------------------------------------------------------------------------------
 
 #include "upgrade_mutex.h"
@@ -437,6 +437,7 @@ void try_clockwise()
     print("try_clockwise = ", count, '\n');
 }
 
+/*
 void try_for_clockwise()
 {
     typedef std::chrono::steady_clock Clock;
@@ -474,6 +475,7 @@ void try_for_clockwise()
     }
     print("try_for_clockwise = ", count, '\n');
 }
+*/
 
 void try_counter_clockwise()
 {
@@ -606,9 +608,9 @@ test_upgrade_mutex()
     }
     {
         state = reading;
-        std::thread t1(try_for_clockwise);
+        //std::thread t1(try_for_clockwise);
         std::thread t2(try_for_counter_clockwise);
-        t1.join();
+        //t1.join();
         t2.join();
     }
 }

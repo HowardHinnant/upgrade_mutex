@@ -1,12 +1,12 @@
 //---------------------------- upgrade_mutex.h ---------------------------------
-// 
+//
 // This software is in the public domain.  The only restriction on its use is
 // that no one can remove it from the public domain by claiming ownership of it,
 // including the original authors.
-// 
+//
 // There is no warranty of correctness on the software contained herein.  Use
 // at your own risk.
-// 
+//
 //------------------------------------------------------------------------------
 
 #ifndef UPGRADE_MUTEX
@@ -69,27 +69,11 @@ public:
     // Shared <-> Exclusive -- unused by Locks without std::lib cooperation
 
     bool try_unlock_shared_and_lock();
-    template <class Rep, class Period>
-        bool
-        try_unlock_shared_and_lock_for(
-                            const std::chrono::duration<Rep, Period>& rel_time);
-    template <class Clock, class Duration>
-        bool
-        try_unlock_shared_and_lock_until(
-                      const std::chrono::time_point<Clock, Duration>& abs_time);
     void unlock_and_lock_shared();
 
     // Shared <-> Upgrade
 
     bool try_unlock_shared_and_lock_upgrade();
-    template <class Rep, class Period>
-        bool
-        try_unlock_shared_and_lock_upgrade_for(
-                            const std::chrono::duration<Rep, Period>& rel_time);
-    template <class Clock, class Duration>
-        bool
-        try_unlock_shared_and_lock_upgrade_until(
-                      const std::chrono::time_point<Clock, Duration>& abs_time);
     void unlock_upgrade_and_lock_shared();
 
     // Upgrade <-> Exclusive
@@ -137,13 +121,6 @@ public:
     // Shared <-> Upgrade
 
     upgrade_lock(std::shared_lock<mutex_type>&& sl, std::try_to_lock_t);
-
-    template <class Clock, class Duration>
-        upgrade_lock(std::shared_lock<mutex_type>&& sl,
-                     const std::chrono::time_point<Clock, Duration>& abs_time);
-    template <class Rep, class Period>
-        upgrade_lock(std::shared_lock<mutex_type>&& sl,
-                     const std::chrono::duration<Rep, Period>& rel_time);
     explicit operator std::shared_lock<mutex_type> () &&;
 
     // Exclusive <-> Upgrade
@@ -260,36 +237,42 @@ public:
     // Shared <-> Exclusive
 
     bool try_unlock_shared_and_lock();
+    void unlock_and_lock_shared();
+
+    /*
+     * These functions make it easy to create code that deadlocks and so
+     * should not be provided or implemented.
+     *
+    void unlock_shared_and_lock();
     template <class Rep, class Period>
         bool
         try_unlock_shared_and_lock_for(
-                            const std::chrono::duration<Rep, Period>& rel_time)
-        {
-            return try_unlock_shared_and_lock_until(
-                                   std::chrono::steady_clock::now() + rel_time);
-        }
+                            const std::chrono::duration<Rep, Period>& rel_time);
     template <class Clock, class Duration>
         bool
         try_unlock_shared_and_lock_until(
                       const std::chrono::time_point<Clock, Duration>& abs_time);
-    void unlock_and_lock_shared();
+    */
 
     // Shared <-> Upgrade
 
     bool try_unlock_shared_and_lock_upgrade();
+    void unlock_upgrade_and_lock_shared();
+
+    /*
+     * These functions make it easy to create code that deadlocks and so
+     * should not be provided or implemented.
+     *
+    void unlock_shared_and_lock_upgrade();
     template <class Rep, class Period>
         bool
         try_unlock_shared_and_lock_upgrade_for(
-                            const std::chrono::duration<Rep, Period>& rel_time)
-        {
-            return try_unlock_shared_and_lock_upgrade_until(
-                                   std::chrono::steady_clock::now() + rel_time);
-        }
+                            const std::chrono::duration<Rep, Period>& rel_time);
     template <class Clock, class Duration>
         bool
         try_unlock_shared_and_lock_upgrade_until(
                       const std::chrono::time_point<Clock, Duration>& abs_time);
-    void unlock_upgrade_and_lock_shared();
+    */
 
     // Upgrade <-> Exclusive
 
@@ -321,23 +304,30 @@ upgrade_mutex::try_lock_until(
         while (true)
         {
             std::cv_status status = gate1_.wait_until(lk, abs_time);
-            if ((state_ & (write_entered_ | upgradable_entered_)) == 0)
+            if (!(state_ & (write_entered_ | upgradable_entered_)))
+            {
                 break;
+            }
             if (status == std::cv_status::timeout)
+            {
                 return false;
+            }
         }
     }
-    state_ |= write_entered_;
+    state_ |= write_entered_; // block new shared or upgradable locks
     if (state_ & n_readers_)
     {
         while (true)
         {
             std::cv_status status = gate2_.wait_until(lk, abs_time);
-            if ((state_ & n_readers_) == 0)
+            if (!(state_ & n_readers_))
+            {
                 break;
+            }
             if (status == std::cv_status::timeout)
             {
                 state_ &= ~write_entered_;
+                gate1_.notify_all();
                 return false;
             }
         }
@@ -356,11 +346,15 @@ upgrade_mutex::try_lock_shared_until(
         while (true)
         {
             std::cv_status status = gate1_.wait_until(lk, abs_time);
-            if ((state_ & write_entered_) == 0 &&
-                                             (state_ & n_readers_) < n_readers_)
+            if (!(state_ & write_entered_) &&
+                (state_ & n_readers_) != n_readers_)
+            {
                 break;
+            }
             if (status == std::cv_status::timeout)
+            {
                 return false;
+            }
         }
     }
     unsigned num_readers = (state_ & n_readers_) + 1;
@@ -381,11 +375,15 @@ upgrade_mutex::try_lock_upgrade_until(
         while (true)
         {
             std::cv_status status = gate1_.wait_until(lk, abs_time);
-            if ((state_ & (write_entered_ | upgradable_entered_)) == 0 &&
-                                             (state_ & n_readers_) < n_readers_)
+            if (!(state_ & (write_entered_ | upgradable_entered_)) &&
+                (state_ & n_readers_) != n_readers_)
+            {
                 break;
+            }
             if (status == std::cv_status::timeout)
+            {
                 return false;
+            }
         }
     }
     unsigned num_readers = (state_ & n_readers_) + 1;
@@ -396,64 +394,32 @@ upgrade_mutex::try_lock_upgrade_until(
 
 template <class Clock, class Duration>
 bool
-upgrade_mutex::try_unlock_shared_and_lock_until(
-                       const std::chrono::time_point<Clock, Duration>& abs_time)
-{
-    std::unique_lock<std::mutex> lk(mut_);
-    if (state_ != 1)
-    {
-        while (true)
-        {
-            std::cv_status status = gate2_.wait_until(lk, abs_time);
-            if (state_ == 1)
-                break;
-            if (status == std::cv_status::timeout)
-                return false;
-        }
-    }
-    state_ = write_entered_;
-    return true;
-}
-
-template <class Clock, class Duration>
-bool
-upgrade_mutex::try_unlock_shared_and_lock_upgrade_until(
-                       const std::chrono::time_point<Clock, Duration>& abs_time)
-{
-    std::unique_lock<std::mutex> lk(mut_);
-    if ((state_ & (write_entered_ | upgradable_entered_)) != 0)
-    {
-        while (true)
-        {
-            std::cv_status status = gate2_.wait_until(lk, abs_time);
-            if ((state_ & (write_entered_ | upgradable_entered_)) == 0)
-                break;
-            if (status == std::cv_status::timeout)
-                return false;
-        }
-    }
-    state_ |= upgradable_entered_;
-    return true;
-}
-
-template <class Clock, class Duration>
-bool
 upgrade_mutex::try_unlock_upgrade_and_lock_until(
                        const std::chrono::time_point<Clock, Duration>& abs_time)
 {
     std::unique_lock<std::mutex> lk(mut_);
-    if ((state_ & n_readers_) != 1)
+    unsigned num_readers = (state_ & n_readers_) - 1;
+    state_ &= ~(upgradable_entered_ | n_readers_);
+    state_ |= write_entered_ | num_readers; // block new shared or upgradable locks
+    if (state_ & n_readers_)
     {
         while (true)
         {
             std::cv_status status = gate2_.wait_until(lk, abs_time);
-            if ((state_ & n_readers_) == 1)
+            if (!(state_ & n_readers_))
+            {
                 break;
+            }
             if (status == std::cv_status::timeout)
+            {
+                unsigned num_readers = (state_ & n_readers_) + 1;
+                state_ &= ~(write_entered_ | n_readers_);
+                state_ |= upgradable_entered_ | num_readers;
+                gate1_.notify_all();
                 return false;
+            }
         }
     }
-    state_ = write_entered_;
     return true;
 }
 
@@ -475,7 +441,9 @@ public:
     ~upgrade_lock()
     {
         if (owns_)
+        {
             m_->unlock_upgrade();
+        }
     }
 
     upgrade_lock() noexcept
@@ -494,7 +462,9 @@ public:
     upgrade_lock& operator=(upgrade_lock&& ul)
     {
         if (owns_)
+        {
             m_->unlock_upgrade();
+        }
         m_ = ul.m_;
         owns_ = ul.owns_;
         ul.m_ = nullptr;
@@ -538,41 +508,9 @@ public:
             }
         }
         else
-            m_ = sl.release();
-    }
-
-    template <class Clock, class Duration>
-        upgrade_lock(std::shared_lock<mutex_type>&& sl,
-                     const std::chrono::time_point<Clock, Duration>& abs_time)
-        : m_(nullptr), owns_(false)
-    {
-        if (sl.owns_lock())
         {
-            if (sl.mutex()->try_unlock_shared_and_lock_upgrade_until(abs_time))
-            {
-                m_ = sl.release();
-                owns_ = true;
-            }
-        }
-        else
             m_ = sl.release();
-    }
-
-    template <class Rep, class Period>
-        upgrade_lock(std::shared_lock<mutex_type>&& sl,
-                     const std::chrono::duration<Rep, Period>& rel_time)
-        : m_(nullptr), owns_(false)
-    {
-        if (sl.owns_lock())
-        {
-            if (sl.mutex()->try_unlock_shared_and_lock_upgrade_for(rel_time))
-            {
-                m_ = sl.release();
-                owns_ = true;
-            }
         }
-        else
-            m_ = sl.release();
     }
 
     explicit operator std::shared_lock<mutex_type> () &&
@@ -583,17 +521,21 @@ public:
             return std::shared_lock<mutex_type>(*release(), std::adopt_lock);
         }
         if (m_ != nullptr)
+        {
             return std::shared_lock<mutex_type>(*release(), std::defer_lock);
+        }
         return std::shared_lock<mutex_type>{};
     }
 
-    // Exclusive <-> Upgrade
+    // Upgrade <-> Exclusive
 
     explicit upgrade_lock(std::unique_lock<mutex_type>&& ul)
         : m_(ul.mutex()), owns_(ul.owns_lock())
     {
         if (owns_)
+        {
             m_->unlock_and_lock_upgrade();
+        }
         ul.release();
     }
 
@@ -605,7 +547,9 @@ public:
             return std::unique_lock<mutex_type>(*release(), std::adopt_lock);
         }
         if (m_ != nullptr)
+        {
             return std::unique_lock<mutex_type>(*release(), std::defer_lock);
+        }
         return std::unique_lock<mutex_type>{};
     }
 
@@ -648,11 +592,15 @@ void
 upgrade_lock<Mutex>::lock()
 {
     if (m_ == nullptr)
+    {
         throw std::system_error(std::error_code(EPERM, std::system_category()),
                                    "upgrade_lock::lock: references null mutex");
+    }
     if (owns_)
+    {
         throw std::system_error(std::error_code(EDEADLK, std::system_category()),
                                           "upgrade_lock::lock: already locked");
+    }
     m_->lock_upgrade();
     owns_ = true;
 }
@@ -662,11 +610,15 @@ bool
 upgrade_lock<Mutex>::try_lock()
 {
     if (m_ == nullptr)
+    {
         throw std::system_error(std::error_code(EPERM, std::system_category()),
                                "upgrade_lock::try_lock: references null mutex");
+    }
     if (owns_)
+    {
         throw std::system_error(std::error_code(EDEADLK, std::system_category()),
                                       "upgrade_lock::try_lock: already locked");
+    }
     owns_ = m_->try_lock_upgrade();
     return owns_;
 }
@@ -678,11 +630,15 @@ upgrade_lock<Mutex>::try_lock_until(
                        const std::chrono::time_point<Clock, Duration>& abs_time)
 {
     if (m_ == nullptr)
+    {
         throw std::system_error(std::error_code(EPERM, std::system_category()),
                          "upgrade_lock::try_lock_until: references null mutex");
+    }
     if (owns_)
+    {
         throw std::system_error(std::error_code(EDEADLK, std::system_category()),
                                 "upgrade_lock::try_lock_until: already locked");
+    }
     owns_ = m_->try_lock_upgrade_until(abs_time);
     return owns_;
 }
@@ -692,8 +648,10 @@ void
 upgrade_lock<Mutex>::unlock()
 {
     if (!owns_)
+    {
         throw std::system_error(std::error_code(EPERM, std::system_category()),
                                 "upgrade_lock::unlock: not locked");
+    }
     m_->unlock_upgrade();
     owns_ = false;
 }
